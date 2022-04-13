@@ -14,11 +14,11 @@ const web3 = new Web3(
 
 const uniswapFactory = new web3.eth.Contract(
     abis.uniswapFactory.uniswapFactory,
-    addresses.uniswapMainnet.factory
+    addresses.uniswapRopsten.factory
 );
 const uniswapRouter = new web3.eth.Contract(
     abis.uniswapRouter.uniswapRouter,
-    addresses.uniswapMainnet.router
+    addresses.uniswapRopsten.router
 );
 
 const sushiswapFactory = new web3.eth.Contract(
@@ -44,11 +44,12 @@ const fromToken = [
 ];
 const fromTokenDecimals = [18];
 
-const toTokens = ['DAI'];
+const toTokens = ['DAI', 'UNI'];
 const toToken = [
     '0xaD6D458402F60fD3Bd25163575031ACDce07538D', // DAI
+    '0x71d82Eb6A5051CfF99582F4CDf2aE9cD402A4882', // UNI
 ];
-const toTokenDecimals = [18];
+const toTokenDecimals = [18, 18];
 const amount = "0.01"
 
 async function main() {
