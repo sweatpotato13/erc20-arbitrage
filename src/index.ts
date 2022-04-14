@@ -5,7 +5,6 @@ import fetch from "cross-fetch";
 
 import abis from "../abis";
 import addresses from "../addresses";
-// import Swapcontract from "../build/contracts/Flashswap.json";
 
 
 const web3 = new Web3(
@@ -30,10 +29,10 @@ const sushiswapRouter = new web3.eth.Contract(
     addresses.sushiswapRopsten.router
 );
 
-// const swapContract = new web3.eth.Contract(
-//     Swapcontract.abi,
-//     addresses.flashswapRopsten.address
-// );
+const flashSwap = new web3.eth.Contract(
+    abis.flashSwap.Flashswap,
+    addresses.flashswapRopsten.address
+)
 
 const { address: admin } = web3.eth.accounts.wallet.add(process.env.PRIVATE_KEY);
 
@@ -50,7 +49,54 @@ const toToken = [
     '0x71d82Eb6A5051CfF99582F4CDf2aE9cD402A4882', // UNI
 ];
 const toTokenDecimals = [18, 18];
-const amount = "0.01"
+const amount = 0.001
+
+const pairs = [
+    {
+        name: 'WETH to BISCUITxx, uniswap>sushi',
+        amountTokenPay: amount,
+        tokenPay: "0xc778417e063141139fce010982780140aa0cd5ab",
+        tokenSwap: "0xEbfc24130F58e67037c8B3CEfEbC8904aEfF6d2E",
+        sourceRouter: addresses.uniswapRopsten.router,
+        targetRouter: addresses.sushiswapRopsten.router,
+        sourceFactory: addresses.uniswapRopsten.factory,
+    },
+    {
+        name: 'WETH to COMP, uniswap>sushi',
+        amountTokenPay: amount,
+        tokenPay: "0xc778417e063141139fce010982780140aa0cd5ab",
+        tokenSwap: "0xf76D4a441E4ba86A923ce32B89AFF89dBccAA075",
+        sourceRouter: addresses.uniswapRopsten.router,
+        targetRouter: addresses.sushiswapRopsten.router,
+        sourceFactory: addresses.uniswapRopsten.factory,
+    }
+
+]
+// async function approve() {
+//     let gasPrice = await web3.eth.getGasPrice();
+//     let nonce = await web3.eth.getTransactionCount(admin);
+
+//     const erc20 = new web3.eth.Contract(
+//         abis.erc20,
+//         "0xEbfc24130F58e67037c8B3CEfEbC8904aEfF6d2E"
+//     );
+
+//     const tx = erc20.methods.approve(
+//         "0x353e6E203E5Dd868973521755954B6CD1b9159B2",
+//         new BigNumber("115792089237316195423570985008687907853269984665640564039457584007913129639935")
+//     );
+//     const data = tx.encodeABI();
+//     const txData = {
+//         from: admin,
+//         to: "0xEbfc24130F58e67037c8B3CEfEbC8904aEfF6d2E",
+//         data: data,
+//         gas: gasPrice,
+//         gasLimit: 30000,
+//         nonce: nonce
+//     };
+//     const receipt = await web3.eth.sendTransaction(txData);
+//     console.log(receipt);
+// }
 
 async function main() {
     const networkId = await web3.eth.net.getId();
@@ -72,92 +118,86 @@ async function main() {
             const object = await fetch("https://cex.io/api/last_price/ETH/USD");
             const ethUsd = parseFloat((await object.json()).lprice);
 
-            for (let i = 0; i < fromTokens.length; i++) {
-                for (let j = 0; j < toTokens.length; j++) {
-                    console.log(`Trading ${toTokens[j]}/${fromTokens[i]} ...`);
+            for (const pair of pairs) {
+                const check = await flashSwap.methods.check(pair.tokenPay, new BigNumber(pair.amountTokenPay * 1e18), pair.tokenSwap, pair.sourceRouter, pair.targetRouter).call();
 
-                    const pairAddress = await uniswapFactory.methods.getPair(fromToken[i], toToken[j]).call();
-                    console.log(`pairAddress ${toTokens[j]}/${fromTokens[i]} is ${pairAddress}`);
-                    const unit0 = await new BigNumber(amount);
-                    const amount0 = await new BigNumber(unit0).shiftedBy(fromTokenDecimals[i]);
-                    console.log(`Input amount of ${fromTokens[i]}: ${unit0.toString()}`);
+                const profit = check[0];
 
-                    // The quote currency needs to be WBNB
-                    let tokenIn, tokenOut;
-                    if (fromToken[i] === WETH) {
-                        tokenIn = fromToken[i];
-                        tokenOut = toToken[j];
-                    } else if (toToken[j] === WETH) {
-                        tokenIn = toToken[j];
-                        tokenOut = fromToken[i];
-                    } else {
-                        return;
+                let s = pair.tokenPay.toLowerCase();
+                const price = ethUsd;
+                if (!price) {
+                    console.log('invalid price', pair.tokenPay);
+                    return;
+                }
+                const profitUsd = profit / 1e18 * price;
+                const percentage = (100 * (profit / 1e18)) / pair.amountTokenPay;
+                console.log(`[${block.number}] [${new Date().toLocaleString()}]: [${pair.name}] Arbitrage checked! Expected profit: ${(profit / 1e18).toFixed(3)} $${profitUsd.toFixed(2)} - ${percentage.toFixed(2)}%`);
+
+                if (profit > 0) {
+                    let gasPrice = await web3.eth.getGasPrice();
+                    console.log(`[${block.number}] [${new Date().toLocaleString()}]: [${pair.name}] Arbitrage opportunity found! Expected profit: ${(profit / 1e18).toFixed(3)} $${profitUsd.toFixed(2)} - ${percentage.toFixed(2)}%`);
+
+                    const tx = flashSwap.methods.start(
+                        block.number + 2,
+                        pair.tokenPay,
+                        new BigNumber(pair.amountTokenPay * 1e18),
+                        pair.tokenSwap,
+                        pair.sourceRouter,
+                        pair.targetRouter,
+                        pair.sourceFactory,
+                    );
+
+                    // let estimateGas: number
+                    // try {
+                    //     estimateGas = await tx.estimateGas({ from: admin });
+                    // } catch (e: any) {
+                    //     console.log(`[${block.number}] [${new Date().toLocaleString()}]: [${pair.name}]`, 'gasCost error', e.message);
+                    //     return;
+                    // }
+
+                    const myGasPrice = parseFloat(gasPrice) * 150000;
+                    const txCostETH = web3.utils.toWei(myGasPrice.toString());
+
+                    // calculate the estimated gas cost in USD
+                    let gasCostUsd = (myGasPrice / 1e18) * price;
+                    const profitMinusFeeInUsd = profitUsd - gasCostUsd;
+
+                    if (profitMinusFeeInUsd < 0.6) {
+                        console.log(`[${block.number}] [${new Date().toLocaleString()}]: [${pair.name}] stopped: `, JSON.stringify({
+                            profit: "$" + profitMinusFeeInUsd.toFixed(2),
+                            profitWithoutGasCost: "$" + profitUsd.toFixed(2),
+                            gasCost: "$" + gasCostUsd.toFixed(2),
+                            myGasPrice: myGasPrice.toString(),
+                            txCostETH: txCostETH,
+                        }));
                     }
 
-                    // The quote currency is not WETH
-                    if (typeof tokenIn === 'undefined') {
-                        return;
+                    if (profitMinusFeeInUsd > 0.6) {
+                        let nonce = await web3.eth.getTransactionCount(admin);
+                        console.log(`[${block.number}] [${new Date().toLocaleString()}]: [${pair.name}] and go: `, JSON.stringify({
+                            profit: "$" + profitMinusFeeInUsd.toFixed(2),
+                            profitWithoutGasCost: "$" + profitUsd.toFixed(2),
+                            gasCost: "$" + gasCostUsd.toFixed(2),
+                        }));
+
+                        const data = tx.encodeABI();
+                        const txData = {
+                            from: admin,
+                            to: addresses.flashswapRopsten.address,
+                            data: data,
+                            gas: gasPrice,
+                            gasLimit: 150000,
+                            nonce: nonce
+                        };
+
+                        console.log(`[${block.number}] [${new Date().toLocaleString()}]: sending transactions...`, JSON.stringify(txData))
+
+                        try {
+                            await web3.eth.sendTransaction(txData);
+                        } catch (e) {
+                            console.error('transaction error', e);
+                        }
                     }
-
-                    // call getAmountsOut in UniSwap
-                    const amounts = await uniswapRouter.methods.getAmountsOut(amount0, [tokenIn, tokenOut]).call();
-                    const unit1 = await new BigNumber(amounts[1]).shiftedBy(-toTokenDecimals[j]);
-                    const amount1 = await new BigNumber(amounts[1]);
-                    console.log(`
-                        Buying token at UniSwap DEX
-                        =================
-                        tokenIn: ${unit0.toString()} ${fromTokens[i]}
-                        tokenOut: ${unit1.toString()} ${toTokens[j]}
-                    `);
-
-                    // call getAmountsOut in SushiSwap
-                    const amounts2 = await sushiswapRouter.methods.getAmountsOut(amount1, [tokenOut, tokenIn]).call();
-                    const unit2 = await new BigNumber(amounts2[1]).shiftedBy(-fromTokenDecimals[i]);
-                    const amount2 = await new BigNumber(amounts2[1]);
-                    console.log(`
-                        Buying back token at SushiSwap DEX
-                        =================
-                        tokenOut: ${unit1.toString()} ${toTokens[j]}
-                        tokenIn: ${unit2.toString()} ${fromTokens[i]}
-                    `);
-
-                    let profit = await new BigNumber(amount2).minus(amount0);
-                    let unit3 = await new BigNumber(unit2).minus(unit0);
-                    // if (profit > 0) {
-                    //     console.log(`Price is higher than expected. (expected: ${toTokenThreshold[j]})`);
-                    //     let nonce = await web3.eth.getTransactionCount(admin);
-                    //     let gasPrice = await web3.eth.getGasPrice();
-                    //     const deadline = Math.floor(Date.now() / 1000) + 60 * 10;
-                    //     const tx = uniswapRouter.methods.swapExactETHForTokens(
-                    //         amount1,
-                    //         [WETH, toToken[j]],
-                    //         process.env.WALLET_ADDRESS as string,
-                    //         deadline
-                    //     )
-                    //     const data = tx.encodeABI();
-                    //     const txData = {
-                    //         gasLimit: 244155,
-                    //         gas: gasPrice,
-                    //         from: admin,
-                    //         to: addresses.uniswapMainnet.router,
-                    //         data,
-                    //         nonce: nonce,
-                    //         value: await web3.utils.toWei(amount, 'ether')
-                    //     }
-                    //     try {
-                    //         console.log(`[${block.number}] [${new Date().toLocaleString()}] : sending transactions...`, JSON.stringify(txData))
-                    //         flag = true;
-                    //         const receipt = await web3.eth.sendTransaction(txData);
-                    //         flag = false;
-                    //         console.log(receipt);
-                    //     } catch (e) {
-                    //         flag = false;
-                    //         console.error('transaction error', e);
-                    //     }
-                    // }
-                    // else {
-                    //     console.log(`Price is lower than expected. (expected: ${toTokenThreshold[j]})`);
-                    // }
                 }
             }
         })
